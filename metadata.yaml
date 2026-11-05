@@ -19,7 +19,7 @@ help: >-
   v3.3 起：「属性」会现场画一张艺人卡（段位进度、四项条、人气条、星币/背包/成就/连签、今日待办、最近动态、伴侣），
   发「属性 文字」才看文字版。
 version: v3.3.0
-author: dsh
+author: lyw6263
 repo: https://github.com/lyw6263/astrbot_plugin_star_game
 support_platforms:
   - aiocqhttp
