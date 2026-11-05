@@ -45,6 +45,8 @@ git clone https://github.com/<你的用户名>/astrbot_plugin_star_game.git
 
 <p align="center"><sub>群里发「帮助」默认发的玩法手册图（两列卡片，跟着配置实时生成）</sub></p>
 
+📕 **完整玩法手册（PDF，9 页）**：[docs/playbook.pdf](docs/playbook.pdf) —— 从五分钟上手到段位表、活动表、礼物价目、NPC 图鉴、指令总表和常见问题，适合第一次玩时通读一遍。
+
 ## 功能
 
 原生代码是 NoneBot2 版，这里已按 AstrBot 4.x 重写命令层，游戏内核（抽签/签到/活动/比拼/段位）原样保留，并补了几块新东西：
@@ -148,6 +150,8 @@ astrbot_plugin_star_game/
 │   ├── helpcard.py    # 图片渲染：玩法手册（两列卡片）
 │   ├── content.py     # 内容池：事件、剧本、评论、文风（纯数据）
 │   └── social.py      # 好感、送礼、表白、CP
+├── resources/         # 帮助图（离线兜底，运行时也会现场重画）
+├── docs/playbook.pdf  # 完整玩法手册（PDF）
 ├── _conf_schema.json  # WebUI 可视化配置
 └── metadata.yaml
 ```
