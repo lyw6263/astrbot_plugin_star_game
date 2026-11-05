@@ -4,8 +4,10 @@
 > 事件、剧本、采访、舆论全部由大模型现场生成，但**数值永远由代码兜底**，模型再离谱也改不动你的段位。
 
 <p align="center">
-  <img src="resources/help.png" width="520" alt="帮助长图">
+  <img src="docs/card.png" width="420" alt="艺人面板">
 </p>
+
+<p align="center"><sub>「属性」指令生成的艺人面板：段位、四项属性、人气、星币、成就、连签、今日待办、最近动态、伴侣</sub></p>
 
 ## 安装
 
@@ -36,6 +38,12 @@ git clone https://github.com/<你的用户名>/astrbot_plugin_star_game.git
 在群里 `@机器人 出道`，或者发 `/出道`。
 
 > 群里需要 `@机器人`，或者用唤醒前缀（默认 `/`）开头。
+
+<p align="center">
+  <img src="resources/help.png" width="520" alt="帮助总览">
+</p>
+
+<p align="center"><sub>群里发「帮助」默认发的总览长图</sub></p>
 
 ## 功能
 
