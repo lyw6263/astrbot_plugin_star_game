@@ -1,0 +1,197 @@
+{
+  "group_whitelist": {
+    "description": "只在这些群启用",
+    "type": "string",
+    "hint": "填群号，多个用逗号分隔；留空＝所有群都能玩",
+    "default": ""
+  },
+  "draw_cooldown_min": {
+    "description": "抽签冷却（分钟）",
+    "type": "int",
+    "hint": "4 人小群建议 8-15，防止一个人刷穿排行榜",
+    "default": 8
+  },
+  "pk_cooldown_min": {
+    "description": "比拼冷却（分钟）",
+    "type": "int",
+    "default": 3
+  },
+  "status_image": {
+    "description": "「属性」实时生成面板图",
+    "type": "bool",
+    "hint": "开＝每次查看都现场画一张艺人卡；关掉就发文字。玩家也可以发「属性 文字」临时看文字版",
+    "default": true
+  },
+  "event_ai_enabled": {
+    "description": "事件库用 AI 生成",
+    "type": "bool",
+    "hint": "关掉就用内置的手写事件，不花 token",
+    "default": true
+  },
+  "event_probability": {
+    "description": "每次成长动作触发突发事件的概率（%）",
+    "type": "int",
+    "hint": "签到/抽签/活动后判定；小群建议 30-40",
+    "default": 35
+  },
+  "event_daily_cap": {
+    "description": "每群每天最多触发几条事件",
+    "type": "int",
+    "default": 8
+  },
+  "event_pool_target": {
+    "description": "事件池保底条数",
+    "type": "int",
+    "hint": "池子低于这个数就在后台补生成，避免玩家等待",
+    "default": 4
+  },
+  "npc_enabled": {
+    "description": "启用系统 NPC 明星",
+    "type": "bool",
+    "default": true
+  },
+  "npc_news_enabled": {
+    "description": "每天生成一条「今日热搜」",
+    "type": "bool",
+    "default": true
+  },
+  "npc_challenge_probability": {
+    "description": "签到后 NPC 主动约战的概率（%）",
+    "type": "int",
+    "default": 12
+  },
+  "npc_event_probability": {
+    "description": "事件落在系统 NPC 身上的概率（%）",
+    "type": "int",
+    "hint": "命中时这次事件只加减那个 NPC 的属性/人气，不动玩家；0＝事件只找玩家",
+    "default": 30
+  },
+  "ai_timeout": {
+    "description": "AI 调用超时（秒）",
+    "type": "int",
+    "hint": "超时就退回内置文案，不让游戏卡住",
+    "default": 15
+  },
+  "ai_daily_cap": {
+    "description": "每天 AI 调用上限（次）",
+    "type": "int",
+    "hint": "事件/点评/搭话/剧本等所有 AI 请求合计，超了只用内置文案不再花 token；0＝不限。建议 100~200",
+    "default": 150
+  },
+  "story_timeout_min": {
+    "description": "通告/采访的剧情超时（分钟）",
+    "type": "int",
+    "hint": "超过这个时间没继续，剧情作废，可以重新接",
+    "default": 30
+  },
+  "post_daily_limit": {
+    "description": "每人每天最多发几条微博",
+    "type": "int",
+    "default": 3
+  },
+  "chat_daily_limit": {
+    "description": "每人每天对同一个 NPC 最多搭讪几次",
+    "type": "int",
+    "default": 3
+  },
+  "ai_switch_admin_only": {
+    "description": "只有群管理能开关 AI 回应",
+    "type": "bool",
+    "hint": "关掉＝群里任何人都能发「关AI」「开AI」",
+    "default": false
+  },
+  "guard_enabled": {
+    "description": "启用发送守卫（防封号）",
+    "type": "bool",
+    "hint": "控频、去重、截断、抹链接，降低被 QQ 风控的概率",
+    "default": true
+  },
+  "guard_per_min": {
+    "description": "每个群每分钟最多发几条",
+    "type": "int",
+    "hint": "超了就排队等待，不会丢消息；小群 10-15 足够",
+    "default": 12
+  },
+  "guard_min_interval_ms": {
+    "description": "两条消息之间的最小间隔（毫秒）",
+    "type": "int",
+    "default": 1200
+  },
+  "guard_dedupe_sec": {
+    "description": "同一条内容多少秒内算重复，直接不发",
+    "type": "int",
+    "hint": "设 0 关闭去重",
+    "default": 3
+  },
+  "guard_max_len": {
+    "description": "单条消息最大字数",
+    "type": "int",
+    "hint": "超过会被截断，防止超长消息触发风控",
+    "default": 1200
+  },
+  "guard_sensitive_words": {
+    "description": "敏感词（逗号分隔）",
+    "type": "string",
+    "hint": "命中的词会被替换成 *；留空则不处理",
+    "default": ""
+  },
+  "help_image": {
+    "description": "「帮助」发图片版",
+    "type": "bool",
+    "hint": "关掉就发长文字版；群友可用「帮助 文字」自己切换",
+    "default": true
+  },
+  "flavor_enabled": {
+    "description": "出结果后让 AI 对当事人点评一句",
+    "type": "bool",
+    "hint": "签到、抽签、活动、比拼之后，有概率追加一行 💬 吐槽或捧场",
+    "default": true
+  },
+  "flavor_probability": {
+    "description": "点评出现的概率（%）",
+    "type": "int",
+    "hint": "0＝从不说话，100＝每次都说话；建议 30~50",
+    "default": 45
+  },
+  "flavor_persona": {
+    "description": "点评者的人设",
+    "type": "string",
+    "hint": "留空＝嘴碎但懂行的群友；可写「毒舌经纪人」「慈祥老粉」等",
+    "default": ""
+  },
+  "flavor_use_persona": {
+    "description": "用机器人自己的人格卡来说这句话",
+    "type": "bool",
+    "hint": "开＝和群里其他聊天是同一个「人」；关＝用上一栏的人设",
+    "default": true
+  },
+  "npc_talk_enabled": {
+    "description": "NPC 会突然找玩家搭话",
+    "type": "bool",
+    "hint": "搭话时机器人会 @ 那个玩家，玩家回「回应 A」或「回应 自己写的话」",
+    "default": true
+  },
+  "npc_talk_probability": {
+    "description": "每次签到/抽签/活动/比拼后 NPC 搭话的概率（%）",
+    "type": "int",
+    "hint": "0＝从不搭话；小群建议 10~25，太频繁会显得吵",
+    "default": 18
+  },
+  "npc_talk_cooldown_min": {
+    "description": "同一个人两次被搭话的最小间隔（分钟）",
+    "type": "int",
+    "default": 30
+  },
+  "invite_enabled": {
+    "description": "NPC 会主动发邀约（约戏/送资源）",
+    "type": "bool",
+    "hint": "邀约有 30 分钟倒计时，回「接邀」拿星币和属性，回「推辞」掉好感",
+    "default": true
+  },
+  "invite_probability": {
+    "description": "每次动作后收到邀约的概率（%）",
+    "type": "int",
+    "hint": "和搭话共用出口，玩家已有未处理邀约时不会叠加；小群建议 10~20",
+    "default": 14
+  }
+}
