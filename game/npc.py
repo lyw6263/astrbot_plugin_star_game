@@ -60,6 +60,9 @@ async def daily_tick(store, ai, gid: str, news_enabled: bool = True) -> Optional
         else:
             gain = random.randint(5, 20) * float(persona.get("growth", 1.0))
         gain = int(gain * random.uniform(0.7, 1.3))
+        cap = int(persona.get("cap") or 0)
+        if cap and cur + gain > cap:
+            continue  # 每个段位留一个锚点，别让低段位 NPC 一路涨出段位
 
         # 加在专长上更多
         weights = {k: 1.0 for k in ATTR_KEYS}
@@ -94,8 +97,15 @@ def random_npc(
         return None
     if near is None:
         return random.choice(npcs)
-    ranked = sorted(npcs, key=lambda n: abs(total_power(n) - near))
-    pool = ranked[:2] if len(ranked) >= 2 else ranked
+    # 和玩家实力差不多的里随机抽：先取 ±35% 带宽（至少 ±300）内的候选，
+    # 太多就只要最接近的一批，避免每次都碰上同一个人。
+    band = max(300, int(near * 0.35))
+    pool = [n for n in npcs if abs(total_power(n) - near) <= band]
+    if len(pool) < 2:
+        ranked = sorted(npcs, key=lambda n: abs(total_power(n) - near))
+        pool = ranked[:3]
+    elif len(pool) > 5:
+        pool = sorted(pool, key=lambda n: abs(total_power(n) - near))[:5]
     return random.choice(pool)
 
 

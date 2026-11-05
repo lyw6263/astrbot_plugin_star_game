@@ -39,6 +39,9 @@ except Exception:  # pragma: no cover
 
 from .game import card as gcard
 from .game import npc as gnpc
+from .game import npclife as gnlife
+from .game import headline as ghead
+from .game import helpcard as ghelp
 from .game import social as gsocial
 from .game.ai import AI, FALLBACK_QUESTIONS, fallback_events
 from .game.const import (
@@ -108,12 +111,25 @@ from .game.engine import (
     tier_change_msg,
     today,
     total_power,
+    fans_text,
 )
 from .game.guard import SendGuard, norm_text
 from .game.store import Store
 
 PLUGIN_NAME = "astrbot_plugin_star_game"
 HELP_IMG = Path(__file__).parent / "resources" / "help.png"
+
+
+def _clip(text: str, limit: int) -> str:
+    """按 limit 收尾，但优先停在标点处，避免半句被切断。"""
+    text = (text or "").strip()
+    if len(text) <= limit:
+        return text
+    cut = text[:limit]
+    for i in range(len(cut) - 1, max(2, len(cut) - 10), -1):
+        if cut[i] in "。！？，、；｜ 」）)…":
+            return cut[: i + 1]
+    return cut + "…"
 
 
 class DrawFilter(filter.CustomFilter):
@@ -215,6 +231,7 @@ class StarGame(Star):
             ),
         )
         logger.info(f"[star_game] 就绪，数据库：{self.store.db_path}")
+        self._spawn(self._headline_loop())
 
     async def terminate(self) -> None:
         for t in list(self._tasks):
@@ -246,6 +263,75 @@ class StarGame(Star):
         return str(v)
 
     # ---------------- 通用 ----------------
+    # ---------------- 今日娱乐头条 ----------------
+    def _headline_times(self) -> List[str]:
+        raw = str(self._s("headline_times", "09:00,20:00") or "")
+        out = []
+        for part in raw.replace("，", ",").split(","):
+            part = part.strip()
+            if len(part) == 5 and part[2] == ":" and part[:2].isdigit() and part[3:].isdigit():
+                out.append(part)
+        return out
+
+    async def _push_group(self, gid: str, text: str) -> bool:
+        try:
+            platform = self.context.get_platform("aiocqhttp")
+            bot = getattr(platform, "bot", None)
+            if not bot:
+                return False
+            await bot.api.call_action(
+                "send_group_msg",
+                group_id=int(gid),
+                message=[{"type": "text", "data": {"text": text}}],
+            )
+            return True
+        except Exception as exc:
+            logger.warning(f"[star_game] 头条播报失败（群 {gid}）：{exc}")
+            return False
+
+    async def _headline_loop(self) -> None:
+        if not self._b("headline_enabled", True):
+            return
+        times = self._headline_times()
+        if not times:
+            return
+        logger.info(f"[star_game] 今日娱乐头条已排程：{', '.join(times)}")
+        while True:
+            try:
+                now = time.strftime("%H:%M")
+                if now in times:
+                    today_s = time.strftime("%Y-%m-%d")
+                    for gid in self.store.groups():
+                        key = f"headline_{now}"
+                        if self.store.meta_get(gid, key) == today_s:
+                            continue
+                        text = ghead.build(self.store, gid, self._i("headline_count", 3))
+                        if not text:
+                            self.store.meta_set(gid, key, today_s)
+                            continue
+                        if await self._push_group(gid, text):
+                            self.store.meta_set(gid, key, today_s)
+                            logger.info(f"[star_game] 头条已播报（群 {gid}，{now}）")
+                        await asyncio.sleep(3)
+                await asyncio.sleep(20)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning(f"[star_game] 头条循环异常：{exc}")
+                await asyncio.sleep(60)
+
+    @filter.command("头条", alias={"娱乐头条", "今日头条", "今日娱乐头条"})
+    async def cmd_headline(self, event: AstrMessageEvent):
+        """今天的娱乐头条（NPC 动态挑 2-3 条）"""
+        if not self._gate(event):
+            return
+        gid = event.get_group_id()
+        text = ghead.build(self.store, gid, self._i("headline_count", 3))
+        if not text:
+            yield event.plain_result("今天还没有能上头条的事，等他们先折腾一会儿 🐟")
+            return
+        yield event.plain_result(text)
+
     def _spawn(self, coro) -> None:
         try:
             task = asyncio.create_task(coro)
@@ -483,6 +569,12 @@ class StarGame(Star):
                 store.meta_set(gid, "news_text", news)
                 store.meta_set(gid, "news_day", today())
                 store.meta_set(gid, "news_shown", "")
+
+            if self._b("npc_enabled", True) and store.meta_get(gid, "npc_life_day") != today():
+                store.meta_set(gid, "npc_life_day", today())
+                evs = gnlife.run_daily_life(store, gid)
+                if evs:
+                    logger.info(f"[star_game] NPC 日常 {len(evs)} 条（{gid}）")
         except Exception as e:  # 后台任务绝不冒泡
             logger.warning(f"[star_game] 每日 NPC 维护失败：{e}")
 
@@ -539,6 +631,36 @@ class StarGame(Star):
                 txt = ""
         self._persona_cache = (now, txt)
         return txt
+
+    async def _affair_event(self, gid: str, uid: str, star: dict) -> str:
+        """小概率「得罪人」事件：从有好感的人里随机扣一点好感。"""
+        if random.random() > 0.15:
+            return ""
+        store = self.store
+        if store is None:
+            return ""
+        cands = [c for c in store.affections_of(gid, uid, 8) if c["affection"] >= 15]
+        if not cands:
+            return ""
+        pick = random.choice(cands)
+        way = random.choice(
+            [
+                "你在后台把{t}的化妆间占了",
+                "采访里你把{t}的名字念错了两回",
+                "直播时你顺手抢了{t}的梗",
+                "彩排迟到，让{t}干等了半个钟头",
+                "群里一句玩笑把{t}的老底翻了出来",
+                "你比{t}早一步把对方的物料发到了超话",
+                "散场时你把{t}的伞拿走了",
+                "合照你站了{t}的C位",
+            ]
+        ).format(t=pick["name"])
+        delta = -random.randint(3, 8)
+        rel = store.add_affection(gid, uid, pick["qq_id"], delta)
+        return (
+            f"😾 小插曲：{way}\n"
+            f"   → {pick['name']} 好感 {delta}（现在 {rel['affection']}）"
+        )
 
     async def _flavor(
         self,
@@ -607,6 +729,44 @@ class StarGame(Star):
             hits.append("married")
         if self._coins(star) >= 1000:
             hits.append("rich")
+        if streak >= 30:
+            hits.append("streak30")
+        if all(int(star[k]) >= 600 for k in ATTR_KEYS):
+            hits.append("sixdim")
+        if total >= 12000:
+            hits.append("legend")
+        if int(star.get("wins") or 0) >= 20:
+            hits.append("warlord")
+        if int(star.get("losses") or 0) >= 10:
+            hits.append("fighter")
+        if self._coins(star) >= 5000:
+            hits.append("tycoon")
+        if int(star.get("fans") or 0) >= 10_000_000:
+            hits.append("famous")
+        if store is not None:
+            try:
+                if store.gifts_total(gid, star["qq_id"]) >= 30:
+                    hits.append("gifter")
+                if len([k for k, v in store.inv_get(gid, star["qq_id"]).items() if int(v) > 0]) >= 5:
+                    hits.append("collector")
+            except Exception:
+                pass
+            mk = self._month_key()
+            try:
+                cs = store.counters_of(gid, star["qq_id"], mk)
+                acts = sum(int(v) for k, v in cs.items() if str(k).startswith("act:"))
+                if acts >= 40:
+                    hits.append("busy")
+                if store.count_activity(gid, star["qq_id"], "发博") >= 30:
+                    hits.append("poster")
+            except Exception:
+                pass
+        try:
+            created = str(star.get("created_at") or "")[:10]
+            if created and (date.today() - date.fromisoformat(created)).days >= 30:
+                hits.append("veteran")
+        except Exception:
+            pass
         return hits
 
     def _check_ach(self, gid: str, star: dict) -> List[str]:
@@ -1281,6 +1441,10 @@ class StarGame(Star):
                 "pop_title": pop_title(renqi),
                 "pop_pct": min(1.0, renqi / 400),
                 "coins": self._coins(star),
+                "gender": star.get("gender", "") or "",
+                "style": star.get("style", "") or "",
+                "fans_text": fans_text(int(star.get("fans") or 0)),
+                "record": f"{star.get('wins', 0)}胜 {star.get('losses', 0)}负 {star.get('draws', 0)}平",
                 "bag": info.get("bag_n", 0),
                 "ach_got": info.get("ach_got", 0),
                 "ach_all": len(ACHIEVEMENTS),
@@ -1288,11 +1452,20 @@ class StarGame(Star):
                 "todo": info.get("todo", ""),
                 "acts": info.get("acts", []),
                 "recent": info.get("recent", []),
+                "affections": self.store.affections_of(gid, uid, 4),
                 "partner": info.get("partner"),
                 "pending": info.get("pending"),
                 "updated": time.strftime("更新于 %m-%d %H:%M"),
             }
-            out = self.data_dir / "cards" / f"{gid}_{uid}.png"
+            cards_dir = self.data_dir / "cards"
+            cards_dir.mkdir(parents=True, exist_ok=True)
+            # 每次重新画一张新文件，避免客户端按文件名缓存旧图
+            for old in cards_dir.glob(f"{gid}_{uid}_*.png"):
+                try:
+                    old.unlink()
+                except Exception:
+                    pass
+            out = cards_dir / f"{gid}_{uid}_{int(time.time())}.png"
             return gcard.render(data, str(out))
         except Exception as exc:
             logger.warning(f"[star_game] 面板图渲染失败，回退文字：{exc}")
@@ -1305,6 +1478,8 @@ class StarGame(Star):
             return
         gid, uid, star, _ = self._player(event)  # type: ignore[misc]
         lines = [f"@{star['name']}", star_card(star)]
+        if not str(star.get("gender") or "").strip():
+            lines.append("  👤 性别还没填 —— 发「性别 男」或「性别 女」补上（表白、CP 会用到）")
         store = self.store
         assert store is not None
 
@@ -1338,8 +1513,8 @@ class StarGame(Star):
         if recent:
             lines.append("  📰 最近动态：")
             for r in recent:
-                lines.append(f"    · {r['kind']}｜{str(r['text'])[:26]}")
-                recent_lines.append(f"{r['kind']}｜{str(r['text'])[:18]}")
+                lines.append(f"    · {r['kind']}｜{_clip(str(r['text']), 34)}")
+                recent_lines.append(f"{r['kind']}｜{_clip(str(r['text']), 40)}")
 
         pid = store.partner_of(gid, uid)
         partner_txt: Optional[str] = None
@@ -1487,6 +1662,11 @@ class StarGame(Star):
         if extra:
             msg.append("")
             msg.append(extra)
+
+        affair = await self._affair_event(gid, uid, star)
+        if affair:
+            msg.append("")
+            msg.append(affair)
 
         fl = await self._flavor(
             star,
@@ -1773,6 +1953,8 @@ class StarGame(Star):
             )
             npc_line = await gnpc.npc_line(self.ai, rival, scene)
 
+        affair = await self._affair_event(gid, uid, me)
+
         rows = [f"⚔️ {res['label']}｜{me['name']} {res['va']} VS {res['vb']} {rival['name']}{'(NPC)' if rival.get('is_npc') else ''}"]
         bonus = []
         if res.get("pa", 0) > 0.001:
@@ -1782,6 +1964,9 @@ class StarGame(Star):
         if bonus:
             rows.append(f"  🔥 人气加成：{' / '.join(bonus)}")
         rows.append(self._pk_tail(me, rival, res))
+        if affair:
+            rows.append("")
+            rows.append(affair)
         if pop_line:
             rows.append(pop_line)
         if npc_line:
@@ -1852,7 +2037,11 @@ class StarGame(Star):
             order_by = "renqi"
         else:
             order_by = next((k for k, nm in ATTRS.items() if nm in arg), "total")
-        top = store.ranking(gid, order_by, 15)
+        include_npc = any(k in arg for k in ("全", "NPC", "npc", "含NPC"))
+        top = store.ranking(gid, order_by, 15, include_npc=include_npc)
+        if not top and not include_npc:
+            include_npc = True
+            top = store.ranking(gid, order_by, 15, include_npc=True)
         if not top:
             yield event.plain_result("本群还没有明星出道，快喊大家「出道」吧～")
             event.stop_event()
@@ -1864,6 +2053,7 @@ class StarGame(Star):
             label = "人气"
         else:
             label = ATTRS[order_by]
+        want_text = "文字" in arg or not self._b("status_image", True) or not gcard.available()
         rows = [f"🏅 本群「{label}」榜（真人和 NPC 一起排）："]
         for i, s in enumerate(top, 1):
             if order_by == "total":
@@ -1878,6 +2068,33 @@ class StarGame(Star):
             tail = f"｜{pop_title(val)}" if order_by == "renqi" else f"｜{cur[1]}"
             rows.append(f"  {medal} {s['name']}{tag}｜{val}{tail}")
         body = "\n".join(rows)
+        if not want_text:
+            try:
+                items = []
+                for idx, s_ in enumerate(top, 1):
+                    if order_by == "total":
+                        val = total_power(s_)
+                    elif order_by == "renqi":
+                        val = pop_of(s_)
+                    else:
+                        val = int(s_[order_by])
+                    cur_, _ = get_tier(total_power(s_))
+                    sub = f"{cur_[1]}" + ("·NPC" if s_.get("is_npc") else "")
+                    items.append({"name": s_["name"], "value": val, "sub": sub})
+                out = self.data_dir / "cards" / f"rank_{gid}_{order_by}.png"
+                gcard.render_rank(
+                    {
+                        "label": f"本群「{label}」榜",
+                        "rows": items,
+                        "updated": time.strftime("更新于 %m-%d %H:%M"),
+                    },
+                    str(out),
+                )
+                yield event.image_result(str(out))
+                event.stop_event()
+                return
+            except Exception as exc:
+                logger.warning(f"[star_game] 排行榜图渲染失败，回退文字：{exc}")
         if head:
             body = f"{head}\n\n{body}"
         yield event.plain_result(body)
@@ -1905,6 +2122,33 @@ class StarGame(Star):
             star, f"把艺名改成了「{new_name}」", "换了新身份", 0, umo=event.unified_msg_origin
         )
         yield event.plain_result(msg)
+        event.stop_event()
+
+    @filter.command("性别", alias={"设置性别", "我的性别", "改性别"})
+    async def cmd_gender(self, event: AstrMessageEvent):
+        """设置自己的性别（比拼、表白、CP 会用到）"""
+        if not self._gate(event):
+            return
+        gid, uid, star, _ = self._player(event)  # type: ignore[misc]
+        raw = event.message_str or ""
+        for kw in ("设置性别", "我的性别", "改性别", "性别"):
+            raw = raw.replace(kw, " ", 1)
+        text = raw.strip().lower()
+        opts = {
+            "男": "男", "男生": "男", "男的": "男", "♂": "男", "m": "男", "male": "男",
+            "女": "女", "女生": "女", "女的": "女", "♀": "女", "f": "女", "female": "女",
+        }
+        g = opts.get(text)
+        if not g:
+            cur = str(star.get("gender") or "").strip() or "还没填"
+            yield event.plain_result(
+                f"你现在的性别：{cur}\n发「性别 男」或「性别 女」就能设置。"
+            )
+            event.stop_event()
+            return
+        star["gender"] = g
+        self.store.save_star(star)  # type: ignore[union-attr]
+        yield event.plain_result(f"✅ 记下了：{star['name']} 是{g}生。")
         event.stop_event()
 
     @filter.command("运势", alias={"今日运势", "luck"})
@@ -2942,11 +3186,72 @@ class StarGame(Star):
             event.stop_event()
             return
         npcs = store.npcs(gid)
+        who = self._arg(event, "NPC", "npc", "艺人", "明星")
+        if who:
+            hit = next((x for x in npcs if who in str(x.get("name") or "")), None)
+            if hit is None:
+                hit = store.get_star(gid, who)
+            if hit and gcard.available():
+                try:
+                    total = total_power(hit)
+                    cur_, nxt_ = get_tier(total)
+                    cur_th = int(cur_[0])
+                    if nxt_:
+                        span = max(1, int(nxt_[0]) - cur_th)
+                        pct = max(0.0, (total - cur_th) / span)
+                    else:
+                        pct = 1.0
+                    attrs = [(ATTRS[k], int(hit.get(k, 0) or 0)) for k in ATTR_KEYS]
+                    persona = next((n for n in NPC_ROSTER if n["key"] == hit.get("npc_key")), {})
+                    fans = int(hit.get("fans") or persona.get("fans") or 0)
+                    out = self.data_dir / "cards" / f"npc_{gid}_{hit['qq_id']}.png"
+                    gcard.render_npc(
+                        {
+                            "name": hit["name"],
+                            "tag": "NPC" if hit.get("is_npc") else "玩家",
+                            "tier": cur_[1],
+                            "gender": hit.get("gender") or persona.get("gender") or "",
+                            "style": hit.get("style") or persona.get("style") or "",
+                            "fans_text": fans_text(fans),
+                            "total": total,
+                            "pct": pct,
+                            "attrs": attrs,
+                            "attr_scale": max(300, int((max(v for _, v in attrs) + 99) // 100 * 100)),
+                            "renqi": pop_of(hit),
+                            "coins": self._coins(hit),
+                            "persona": hit.get("persona", "") or persona.get("persona", "") or persona.get("tag", ""),
+                            "affections": self.store.affections_of(gid, hit["qq_id"], 5),
+                            "recent": gnlife.recent_of(self.store, gid, hit["name"], 3),
+                        },
+                        str(out),
+                    )
+                    yield event.image_result(str(out))
+                    event.stop_event()
+                    return
+                except Exception as exc:
+                    logger.warning(f"[star_game] 艺人卡渲染失败，回退文字：{exc}")
+            if hit:
+                body = star_card(hit)
+                if head:
+                    body = f"{head}\n\n{body}"
+                yield event.plain_result(body)
+                event.stop_event()
+                return
+            yield event.plain_result(f"本群没找到「{who}」这个艺人～")
+            event.stop_event()
+            return
         rows = ["🎭 本群的虚拟艺人（可以「比拼」也可以「表白」）："]
         for s in sorted(npcs, key=lambda x: total_power(x), reverse=True):
             cur, _ = get_tier(total_power(s))
             persona = next((n for n in NPC_ROSTER if n["key"] == s["npc_key"]), {})
-            rows.append(f"  · {s['name']}｜{cur[1]}｜{total_power(s)}｜{persona.get('tag', '')}")
+            who = s.get("gender") or persona.get("gender") or "?"
+            sty = s.get("style") or persona.get("style") or ""
+            fans = int(s.get("fans") or persona.get("fans") or 0)
+            rows.append(
+                f"  · {s['name']}（{who}）｜{cur[1]}｜{total_power(s)}"
+                f"｜{persona.get('tag', '')}" + (f"｜{sty}" if sty else "")
+                + f"｜粉丝 {fans_text(fans)}"
+            )
         body = "\n".join(rows)
         if head:
             body = f"{head}\n\n{body}"
@@ -2974,6 +3279,90 @@ class StarGame(Star):
         yield event.plain_result(body)
         event.stop_event()
 
+    def _help_image(self) -> str:
+        """现场画一张玩法手册图（跟着配置走，不会过期）。"""
+        draw_cd = self._i("draw_cooldown_min", 8)
+        pk_cd = self._i("pk_cooldown_min", 3)
+        post_cap = self._i("post_daily_limit", 3)
+        chat_cap = self._i("chat_daily_limit", 3)
+        acts = " / ".join(ACTIVITIES.keys())
+        gift_rows = [[k, f"{v['price']} 星币　好感 {v['lo']}~{v['hi']}"] for k, v in GIFT_SHOP.items()]
+        assist = [[f"雇助理 {lv}", f"{cost} 星币　每天 +{n} 星币"] for lv, (cost, n, _d) in ASSISTANT_LEVELS.items()]
+        data = {
+            "sections": [
+                {
+                    "label": "出门第一步",
+                    "rows": [
+                        ["出道", f"注册成艺人，送 {COIN_START} 星币"],
+                        ["属性", "看你的艺人卡（面板图）；「属性 文字」看纯文本"],
+                        ["改名 艺名", "换艺名　·　「性别 男/女」补档案"],
+                    ],
+                },
+                {
+                    "label": "每天练功",
+                    "rows": [
+                        ["签到", "四项 +1~3，随机一项再 +3~10，人气 +1~3"],
+                        [f"抽签 [类型]", f"0~100 随机注入，冷却 {draw_cd} 分钟"],
+                        ["运势", "今日运势 / 幸运物，看看今天适合干嘛"],
+                        ["参加 活动名", f"{acts}　·　每天每项一次，场地费 {ACTIVITY_COST}"],
+                    ],
+                },
+                {
+                    "label": "对抗",
+                    "rows": [
+                        ["比拼 @某人 [单项]", f"不写单项＝比综合实力，冷却 {pk_cd} 分钟"],
+                        ["比拼", "不写对手＝随机挑一个实力接近的 NPC"],
+                        ["", "胜者四项 +8~18、星币 +10；败者 +1~6 安慰奖"],
+                    ],
+                },
+                {
+                    "label": "AI 剧情（每局现场生成）",
+                    "rows": [
+                        ["接戏", "三幕剧本，回「选 A/B/C」推进，结局按表现分给片酬"],
+                        ["采访", "记者提问，回「回答 你的话」拿头条"],
+                        ["发博", f"AI 写评论区（粉丝/路人/黑子），每天 {post_cap} 条"],
+                        ["搭讪", f"NPC 找你说话，回「回应 A」或「回应 你想说的」，每天 {chat_cap} 次"],
+                        ["放弃 / 月报", "中途弃演 / 本月回顾总结"],
+                    ],
+                },
+                {
+                    "label": "关系与感情",
+                    "rows": [
+                        ["送礼 名字 礼物", "礼物要先在商店买，每天每种有上限"],
+                        ["表白 名字", "NPC 好感够了必答应；真人要等对方「答应」"],
+                        ["求婚", f"需要求婚戒指（{GIFT_SHOP['求婚戒指']['price']} 星币）"],
+                        ["答应 / 拒绝", "别人向你表白或求婚时用"],
+                        ["情侣 / 分手", "看关系　·　分手掉好感，戒指不退"],
+                    ],
+                },
+                {
+                    "label": "星币与经营",
+                    "rows": [
+                        ["商店 / 买 / 背包", "买礼物、看自己有什么"],
+                        ["事务所", "看助理等级；等级越高每天自动赚的越多"],
+                        ["粉丝团 / 应援", f"粉丝团看人设；应援花 {FAN_CHEER_COST} 星币打投一次"],
+                        ["考勤", "本月签到/活动/胜场统计，月初拿年终奖"],
+                    ],
+                },
+                {
+                    "label": "看数据与设置",
+                    "rows": [
+                        ["排行 [全]", "默认只排真人；「排行 全」连 NPC 一起排"],
+                        ["明星 名字", "任意艺人档案（含好感、最近动态）"],
+                        ["事件 / 头条", "今天的突发事件 / 今日娱乐头条"],
+                        ["成就 / AI关 / AI开", "看徽章进度 / 关掉这个群的 AI 剧情和聊天"],
+                        ["帮助 文字", "完整文字版手册"],
+                    ],
+                },
+                {"label": "礼物价格", "kind": "kv", "rows": gift_rows},
+                {"label": "助理档位", "kind": "kv", "rows": assist},
+            ],
+            "tiers": [(int(t), str(n)) for t, n in TIERS],
+            "footer": "第一件事：@机器人 出道　·　遇到问题：@机器人 帮助",
+        }
+        out = self.data_dir / "cards" / "help.png"
+        return ghelp.render_help(data, str(out))
+
     @filter.command("帮助", alias={"菜单", "玩法", "help", "星途帮助"})
     async def cmd_help(self, event: AstrMessageEvent):
         """完整玩法手册（默认发一张图，发「帮助 文字」看纯文本版）"""
@@ -2982,8 +3371,16 @@ class StarGame(Star):
         arg = self._arg(event, "帮助", "菜单", "玩法", "星途帮助", "help")
         want_text = any(k in arg for k in ("文字", "文本", "版", "text"))
 
-        # 默认发表格图，群里不会刷屏
-        if not want_text and self._b("help_image", True) and HELP_IMG.exists():
+        # 默认发现场画的表格图，群里不会刷屏
+        if not want_text and self._b("help_image", True) and ghelp.available():
+            try:
+                img = self._help_image()
+                yield event.image_result(img)
+                event.stop_event()
+                return
+            except Exception as e:
+                logger.warning(f"[star_game] 帮助图生成/发送失败，改用文字：{e}")
+        elif not want_text and HELP_IMG.exists():
             try:
                 yield event.image_result(str(HELP_IMG))
                 event.stop_event()

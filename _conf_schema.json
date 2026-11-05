@@ -1,4 +1,4 @@
-{
+﻿{
   "group_whitelist": {
     "description": "只在这些群启用",
     "type": "string",
@@ -32,18 +32,18 @@
     "description": "每次成长动作触发突发事件的概率（%）",
     "type": "int",
     "hint": "签到/抽签/活动后判定；小群建议 30-40",
-    "default": 35
+    "default": 25
   },
   "event_daily_cap": {
     "description": "每群每天最多触发几条事件",
     "type": "int",
-    "default": 8
+    "default": 5
   },
   "event_pool_target": {
     "description": "事件池保底条数",
     "type": "int",
     "hint": "池子低于这个数就在后台补生成，避免玩家等待",
-    "default": 4
+    "default": 6
   },
   "npc_enabled": {
     "description": "启用系统 NPC 明星",
@@ -193,5 +193,20 @@
     "type": "int",
     "hint": "和搭话共用出口，玩家已有未处理邀约时不会叠加；小群建议 10~20",
     "default": 14
+  },
+  "headline_enabled": {
+    "type": "bool",
+    "default": true,
+    "description": "每天定时播报「今日娱乐头条」（挑 2-3 条 NPC 动态）"
+  },
+  "headline_times": {
+    "type": "string",
+    "default": "09:00,20:00",
+    "description": "头条播报时间，逗号分隔的 HH:MM（24 小时制）"
+  },
+  "headline_count": {
+    "type": "int",
+    "default": 3,
+    "description": "每次头条播报几条动态（2-3 比较合适）"
   }
 }

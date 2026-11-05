@@ -60,6 +60,9 @@ class Store:
                     is_npc     INTEGER NOT NULL DEFAULT 0,
                     npc_key    TEXT,
                     persona    TEXT,
+                    gender     TEXT NOT NULL DEFAULT '',
+                    style      TEXT NOT NULL DEFAULT '',
+                    fans       INTEGER NOT NULL DEFAULT 0,
                     created_at TEXT NOT NULL,
                     PRIMARY KEY (group_id, qq_id)
                 );
@@ -174,6 +177,12 @@ class Store:
                 c.execute(
                     "ALTER TABLE stars ADD COLUMN coins INTEGER NOT NULL DEFAULT 150"
                 )
+            if "gender" not in cols:
+                c.execute("ALTER TABLE stars ADD COLUMN gender TEXT NOT NULL DEFAULT ''")
+            if "style" not in cols:
+                c.execute("ALTER TABLE stars ADD COLUMN style TEXT NOT NULL DEFAULT ''")
+            if "fans" not in cols:
+                c.execute("ALTER TABLE stars ADD COLUMN fans INTEGER NOT NULL DEFAULT 0")
             rcols = {r["name"] for r in c.execute("PRAGMA table_info(relations)").fetchall()}
             if "married" not in rcols:
                 c.execute(
@@ -200,14 +209,17 @@ class Store:
         attrs: Optional[dict] = None,
         persona: str = "",
         renqi: int = 10,
+        gender: str = "",
+        style: str = "",
+        fans: int = 0,
     ) -> dict:
         attrs = attrs or {}
         with self._conn() as c:
             c.execute(
                 """INSERT OR IGNORE INTO stars
                    (group_id,qq_id,name,changtiao,chuangzuo,wudao,shengyue,renqi,coins,
-                    is_npc,npc_key,persona,created_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    is_npc,npc_key,persona,gender,style,fans,created_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     gid,
                     uid,
@@ -221,6 +233,9 @@ class Store:
                     1 if is_npc else 0,
                     npc_key,
                     persona,
+                    gender,
+                    style,
+                    max(0, int(fans or 0)),
                     now_iso(),
                 ),
             )
@@ -240,7 +255,7 @@ class Store:
             c.execute(
                 """UPDATE stars SET name=?, changtiao=?, chuangzuo=?, wudao=?, shengyue=?,
                        renqi=?, coins=?, wins=?, losses=?, draws=?, last_sign=?, last_draw=?, last_pk=?,
-                       sign_streak=?
+                       sign_streak=?, gender=?, style=?, fans=?
                    WHERE group_id=? AND qq_id=?""",
                 (
                     s["name"],
@@ -257,6 +272,9 @@ class Store:
                     s.get("last_draw"),
                     s.get("last_pk"),
                     int(s.get("sign_streak") or 0),
+                    str(s.get("gender") or ""),
+                    str(s.get("style") or ""),
+                    max(0, int(s.get("fans") or 0)),
                     s["group_id"],
                     s["qq_id"],
                 ),
@@ -281,15 +299,25 @@ class Store:
             ).fetchall()
         return [dict(r) for r in rows]
 
-    def ranking(self, gid: str, order_by: str = "total", limit: int = 50) -> List[dict]:
+    def ranking(
+        self,
+        gid: str,
+        order_by: str = "total",
+        limit: int = 50,
+        include_npc: bool = True,
+    ) -> List[dict]:
         if order_by in ("changtiao", "chuangzuo", "wudao", "shengyue", "renqi"):
             col = order_by
         else:
             col = "(changtiao+chuangzuo+wudao+shengyue)"
+        where = "group_id=?"
+        args = [gid]
+        if not include_npc:
+            where += " AND is_npc=0"
         with self._conn() as c:
             rows = c.execute(
-                f"SELECT * FROM stars WHERE group_id=? ORDER BY {col} DESC LIMIT ?",
-                (gid, limit),
+                f"SELECT * FROM stars WHERE {where} ORDER BY {col} DESC LIMIT ?",
+                (*args, limit),
             ).fetchall()
         return [dict(r) for r in rows]
 
@@ -448,6 +476,22 @@ class Store:
                 (gid, today(), kind, text, now_iso()),
             )
 
+    def groups(self) -> List[str]:
+        """有档的群（用来判断头条该往哪播）。"""
+        with self._conn() as c:
+            rows = c.execute("SELECT DISTINCT group_id FROM stars").fetchall()
+        return [r["group_id"] for r in rows]
+
+    def recent_events(self, gid: str, limit: int = 80) -> List[dict]:
+        """最近的群事件流水（按 id 倒序）。"""
+        with self._conn() as c:
+            rows = c.execute(
+                "SELECT id, day, kind, text, created_at FROM event_log "
+                "WHERE group_id=? ORDER BY id DESC LIMIT ?",
+                (gid, int(limit)),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
     def events_today(self, gid: str, limit: int = 12) -> List[dict]:
         with self._conn() as c:
             rows = c.execute(
@@ -530,6 +574,32 @@ class Store:
             ).fetchall()
         return [dict(r) for r in rows]
 
+    def affections_of(self, gid: str, uid: str, limit: int = 6) -> List[dict]:
+        """我看别人的好感（正负都算，0 不算），按好感绝对值从大到小。"""
+        with self._conn() as c:
+            rows = c.execute(
+                """SELECT r.affection AS aff, s.name AS name, s.is_npc AS is_npc,
+                          s.qq_id AS other_id
+                     FROM relations r
+                     JOIN stars s
+                       ON s.group_id = r.group_id
+                      AND s.qq_id = CASE WHEN r.a_id = ? THEN r.b_id ELSE r.a_id END
+                    WHERE r.group_id = ? AND (r.a_id = ? OR r.b_id = ?)
+                      AND r.affection <> 0
+                    ORDER BY ABS(r.affection) DESC
+                    LIMIT ?""",
+                (uid, gid, uid, uid, max(1, int(limit))),
+            ).fetchall()
+        return [
+            {
+                "name": r["name"],
+                "affection": int(r["aff"]),
+                "is_npc": bool(r["is_npc"]),
+                "qq_id": r["other_id"],
+            }
+            for r in rows
+        ]
+
     def partner_of(self, gid: str, uid: str) -> Optional[str]:
         for r in self.couples(gid):
             if r["a_id"] == uid:
@@ -589,6 +659,16 @@ class Store:
         return True
 
     # ---------------- 待办（表白请求） ----------------
+    def gifts_total(self, gid: str, uid: str) -> int:
+        """这个人累计送出的礼物份数（relations.gifts 双向求和）。"""
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT COALESCE(SUM(gifts),0) AS n FROM relations "
+                "WHERE group_id=? AND (a_id=? OR b_id=?)",
+                (gid, uid, uid),
+            ).fetchone()
+        return int(row["n"] or 0) if row else 0
+
     def add_pending(self, gid: str, kind: str, from_id: str, to_id: str) -> None:
         with self._conn() as c:
             c.execute(

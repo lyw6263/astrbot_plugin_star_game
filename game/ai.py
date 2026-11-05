@@ -15,6 +15,7 @@ import re
 import time
 from typing import List, Optional
 
+from . import content as gcontent
 from .const import (
     ATTR_KEYS,
     EVENT_KINDS,
@@ -28,6 +29,26 @@ from .const import (
 EFFECT_KEYS = set(ATTR_KEYS) | {"renqi"}
 RENQI_LO, RENQI_HI = -18, 18
 
+EVENT_STYLES = [
+    "营销号爆料体：先说传闻，再补一句「知情人称」",
+    "狗仔跟拍体：时间地点加一个具体动作细节",
+    "工作室声明体：先撇清，再留个尾巴",
+    "路人偶遇体：第一人称偶遇，带点主观吐槽",
+    "榜单数据体：用排名、销量、播放量说话",
+    "品牌官宣体：代言/合作/站台，商业味重一点",
+    "综艺花絮体：后台、彩排、剪辑段落里的翻车",
+    "粉丝小作文体：情绪浓，带点控评腔",
+]
+
+NEWS_STYLES = [
+    "四条分别写成：爆料、词条+点评、粉丝控评、路人目击",
+    "四条都用「#话题# + 一句吐槽」的热搜词条格式",
+    "四条里有两条是夸奖，两条是阴阳怪气",
+    "四条都从「工作人员爆料」的角度写",
+    "四条里有一条明显是假瓜，写得越像真的越好",
+    "四条各自带一个具体场景：机场、片场、后台、发布会",
+]
+
 EVENT_SYSTEM = (
     "你是一款 QQ 群『娱乐圈明星养成』文字游戏的事件编辑，负责写娱乐圈八卦事件。"
     "文字要短、有戏、像营销号，但绝对不能涉及真实艺人、真实品牌、政治或色情内容。"
@@ -39,7 +60,7 @@ EVENT_PROMPT = """请生成 {n} 条娱乐圈突发事件，供游戏随机抽取
 {{"kind":"类型","title":"标题","text":"正文","effects":{{"changtiao":0}},"target":"one"}}
 
 规则：
-1. kind 只能取：{kinds}
+1. kind 只能取：{kinds}；请尽量分散，不要连着好几条都是同一个 kind，一轮里至少用到 4 种不同的 kind（代言/影视/音乐/时尚/应援 这类是好资源，争议/私生/黑料/解约 这类是坏消息）
 2. title 不超过 14 个字；text 40~90 个汉字，第三人称，有画面感
 3. 事件主角必须写成占位符 {{name}}，系统会替换成玩家艺名，例如「{{name}}在后台被拍到低头刷手机」
 4. text 和 title 里除了 {{name}} 不允许出现任何人名：不写其他 NPC、不写真实艺人、不编新名字
@@ -53,6 +74,8 @@ EVENT_PROMPT = """请生成 {n} 条娱乐圈突发事件，供游戏随机抽取
    翻车、被黑、塌房要减 renqi。别让每条都只改技能属性
 9. target: "one" 表示只影响一个人，"all" 表示影响全群
 10. {avoid}
+11. 文风要杂：不要每条都写成「被拍到/被爆料」；标题也别全是「XX 被曝…」，
+    按下面这个方向写本轮：{style}
 """
 
 NEWS_SYSTEM = "你是一个娱乐八卦号的运营，写短句热搜，不涉及真实艺人。"
@@ -65,6 +88,7 @@ DRAMA_SYSTEM = (
 DRAMA_SCENE_PROMPT = """剧本《{title}》，玩家饰演「{role}」。前情：{history}
 
 请写第 {step} 幕：60~100 字场景描写（第二人称，有具体动作和对话），然后给玩家 3 个选择。
+本幕文风：{style}
 选择要具体、各有代价，不要写「继续」「离开」这种空话。
 
 只输出 JSON：{{"scene":"...","options":["...","...","..."]}}"""
@@ -73,19 +97,22 @@ DRAMA_END_PROMPT = """剧本《{title}》杀青了。玩家在三幕里的选择
 {choices}
 
 请写 80~120 字结局旁白（第二人称），并根据选择给表现分和属性奖励。
+收尾方式：{style}
 只输出 JSON：{{"ending":"...","score":0,"effects":{{"changtiao":0}}}}
 score 是 0~100 的整数；effects 的 key 只能是 changtiao/chuangzuo/wudao/shengyue/renqi，
 最多三个，取值 -5 到 8（renqi 是 -15 到 15）。"""
 
 INTERVIEW_Q_PROMPT = """你是娱乐记者。请向艺人「{name}」提一个刁钻但有分寸的问题，
 涉及作品、绯闻、路透、争议都行，20~40 字。
-只输出问题本身，不要加「问：」「记者：」这类前缀。"""
+只输出问题本身，不要加「问：」「记者：」这类前缀。
+提问风格：{style}"""
 
 JUDGE_PROMPT = """记者问：「{q}」
 艺人回答：「{a}」
 
 请评判这个回答的效果，写出记者或网友的反应，并给一个见报标题。
 只输出 JSON：{{"comment":"...","headline":"...","score":0,"effects":{{"shengyue":0}}}}
+本轮反应走向：{style}
 comment 30 字内，headline 14 字内，score 0~10；effects 最多三个 key，取值 -3 到 4（renqi 可用 -10 到 10）。"""
 
 POST_PROMPT = """艺人「{name}」（{tier}，综合实力 {power}）刚发了一条微博：
@@ -93,12 +120,14 @@ POST_PROMPT = """艺人「{name}」（{tier}，综合实力 {power}）刚发了�
 
 请模拟评论区：粉丝、路人、黑子、营销号各一条（每条 12~25 字，带点口吻差异），并判断舆论倾向。
 只输出 JSON：{{"comments":["...","...","...","..."],"sentiment":"positive|neutral|negative","effects":{{"changtiao":0}}}}
-effects 最多三个 key，取值 -4 到 4（renqi 可用 -12 到 12）。"""
+effects 最多三个 key，取值 -4 到 4（renqi 可用 -12 到 12）。
+评论区氛围：{style}"""
 
 MONTHLY_PROMPT = """你是娱乐圈记者，给艺人「{name}」写一段本月的「星途月报」旁白。
 要求：第二人称，80~120 字，有画面感，带一点调侃但不要刻薄，不要出现具体真实品牌。
 数据：{stats}
-只输出正文，不要标题。"""
+只输出正文，不要标题。
+调性：{style}"""
 
 FALLBACK_QUESTIONS = [
     "有人说你是靠资源上位的，你怎么看？",
@@ -106,7 +135,7 @@ FALLBACK_QUESTIONS = [
     "你和某位同行的关系，方便透露一下吗？",
     "有网友说你的作品千篇一律，你想回应吗？",
     "如果这次没拿奖，你会怎么面对粉丝？",
-]
+] + list(gcontent.MORE_QUESTIONS)
 
 
 NEWS_PROMPT = """群里的虚拟艺人：{npcs}
@@ -114,6 +143,7 @@ NEWS_PROMPT = """群里的虚拟艺人：{npcs}
 
 请写 4 条今天的「娱乐圈热搜」短句，每条 12~28 字，带一点八卦口吻，
 必须至少提到一位上面的虚拟艺人，可以用「疑似」「据传」这种营销号口吻。
+本轮排版要求：{style}
 只输出 4 行纯文本，不要编号、不要解释。"""
 
 FLAVOR_PROMPT = """群里艺人「{name}」刚做完一件事。
@@ -124,7 +154,8 @@ FLAVOR_PROMPT = """群里艺人「{name}」刚做完一件事。
 1. 第二人称，12~26 个字，像群聊里随口说的；
 2. 可以损、可以夸，但别骂人、别提真实品牌和真人；
 3. 不要复述具体数字，不要加引号、不要写「他说」这类旁白；
-4. 只输出这一句话。"""
+4. 口吻偏：{style}
+5. 只输出这一句话。"""
 
 TALK_PROMPT = """你是娱乐圈里的系统 NPC。现在要写一段「NPC 突然找玩家搭话」的现场。
 
@@ -215,6 +246,7 @@ class AI:
             n=n + 2,
             kinds="、".join(EVENT_KINDS),
             avoid=f"这几条标题已经用过，换新的：{avoid}",
+            style=random.choice(EVENT_STYLES),
         )
         raw = await self._ask(prompt, EVENT_SYSTEM)
         events = parse_events(raw, limit=n + 2)
@@ -227,6 +259,7 @@ class AI:
         prompt = NEWS_PROMPT.format(
             npcs="、".join(npc_names) or "无",
             players="、".join(player_names) or "无",
+            style=random.choice(NEWS_STYLES),
         )
         raw = await self._ask(prompt, NEWS_SYSTEM, timeout=min(self.timeout, 12.0))
         lines = [ln.strip(" -·•*#") for ln in raw.splitlines() if ln.strip()]
@@ -278,7 +311,12 @@ class AI:
         else:
             who = persona or "一个嘴碎但有分寸、很懂娱乐圈的群友"
             system = f"你在 QQ 群里扮演{who}。只输出一句话，不要旁白、不要加引号。"
-        prompt = FLAVOR_PROMPT.format(name=name, action=action, outcome=outcome or "无")
+        prompt = FLAVOR_PROMPT.format(
+            name=name,
+            action=action,
+            outcome=outcome or "无",
+            style=random.choice(gcontent.FLAVOR_TONES),
+        )
         text = await self._ask(prompt, system, timeout=min(self.timeout, 6.0))
         text = (text or "").strip()
         if not text:
@@ -311,7 +349,7 @@ class AI:
             player=player_name,
             tier=tier,
             power=power,
-            scene=scene or "后台走廊，两个人都刚收工",
+            scene=scene or random.choice(gcontent.TALK_SCENES),
         )
         raw = await self._ask(prompt, system, timeout=min(self.timeout, 12.0))
         data = _load_obj(raw)
@@ -391,19 +429,27 @@ class AI:
         self, title: str, role: str, step: int, history: str
     ) -> Optional[dict]:
         prompt = DRAMA_SCENE_PROMPT.format(
-            title=title, role=role, step=step, history=history or "（故事刚开始）"
+            title=title,
+            role=role,
+            step=step,
+            history=history or "（故事刚开始）",
+            style=random.choice(gcontent.SCENE_STYLES),
         )
         raw = await self._ask(prompt, DRAMA_SYSTEM, timeout=min(self.timeout, 18.0))
         return parse_drama_scene(raw, expect_options=3)
 
     async def drama_end(self, title: str, choices: str) -> Optional[dict]:
-        prompt = DRAMA_END_PROMPT.format(title=title, choices=choices)
+        prompt = DRAMA_END_PROMPT.format(
+            title=title, choices=choices, style=random.choice(gcontent.SCENE_STYLES)
+        )
         raw = await self._ask(prompt, DRAMA_SYSTEM, timeout=min(self.timeout, 18.0))
         return parse_drama_end(raw)
 
     # ---------------- 采访 ----------------
     async def interview_question(self, name: str) -> str:
-        prompt = INTERVIEW_Q_PROMPT.format(name=name)
+        prompt = INTERVIEW_Q_PROMPT.format(
+            name=name, style=random.choice(gcontent.INTERVIEW_TONES)
+        )
         text = await self._ask(prompt, NEWS_SYSTEM, timeout=12.0)
         text = text.strip().strip("「」“”\"'")
         if not text or len(text) > 80:
@@ -411,7 +457,9 @@ class AI:
         return text
 
     async def judge_answer(self, question: str, answer: str) -> Optional[dict]:
-        prompt = JUDGE_PROMPT.format(q=question, a=answer[:200])
+        prompt = JUDGE_PROMPT.format(
+            q=question, a=answer[:200], style=random.choice(gcontent.JUDGE_STYLES)
+        )
         raw = await self._ask(prompt, NEWS_SYSTEM, timeout=min(self.timeout, 15.0))
         return parse_judge(raw, lo=-3, hi=4, max_score=10)
 
@@ -420,14 +468,20 @@ class AI:
         self, name: str, tier: str, power: int, content: str
     ) -> Optional[dict]:
         prompt = POST_PROMPT.format(
-            name=name, tier=tier, power=power, content=content[:200]
+            name=name,
+            tier=tier,
+            power=power,
+            content=content[:200],
+            style=random.choice(gcontent.POST_STYLES),
         )
         raw = await self._ask(prompt, NEWS_SYSTEM, timeout=min(self.timeout, 15.0))
         return parse_post(raw)
 
     # ---------------- 月报 ----------------
     async def monthly_report(self, name: str, stats: str) -> str:
-        prompt = MONTHLY_PROMPT.format(name=name, stats=stats)
+        prompt = MONTHLY_PROMPT.format(
+            name=name, stats=stats, style=random.choice(gcontent.MONTHLY_TONES)
+        )
         text = await self._ask(prompt, NEWS_SYSTEM, timeout=min(self.timeout, 15.0))
         if not text:
             return ""

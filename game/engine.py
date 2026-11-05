@@ -214,6 +214,20 @@ def do_pk(s_a: dict, s_b: dict, attr_key: Optional[str] = None) -> dict:
 
 
 # ---------------- 面板 ----------------
+def fans_text(n) -> str:
+    """粉丝数：一万以上按「万」，一亿以上按「亿」。"""
+    try:
+        n = int(n or 0)
+    except Exception:
+        n = 0
+    if n >= 100000000:
+        return f"{n / 100000000:.1f}亿"
+    if n >= 10000:
+        w = n / 10000
+        return f"{w:.1f}万" if w < 100 else f"{int(round(w))}万"
+    return str(n)
+
+
 def star_card(s: dict) -> str:
     total = total_power(s)
     cur, nxt = get_tier(total)
@@ -221,10 +235,23 @@ def star_card(s: dict) -> str:
     rows = [f"🎬 {s['name']}（{cur[1]}）"]
     rows.append("  " + " ｜ ".join(f"{ATTRS[k]} {int(s[k])}" for k in ATTR_KEYS))
     rows.append(f"  综合实力：{total}")
+    who = str(s.get("gender") or "").strip()
+    sty = str(s.get("style") or "").strip()
+    fans = int(s.get("fans") or 0)
+    if who or sty or fans:
+        bits = []
+        if who:
+            bits.append(f"性别 {who}")
+        if sty:
+            bits.append(f"风格 {sty}")
+        if fans:
+            bits.append(f"粉丝 {fans_text(fans)}")
+        rows.append("  " + " ｜ ".join(bits))
     if nxt:
         rows.append(f"  ➡️ 距「{nxt[1]}」还需 {nxt[0] - total} 点")
     else:
         rows.append("  ✨ 已登顶最高段位！")
+    rows.append(f"  💰 星币：{int(s.get('coins') or 0)}")
     bonus = pop_bonus_text(pop)
     rows.append(
         f"  🔥 人气：{pop}（{pop_title(pop)}）" + (f"｜比拼加成 {bonus}" if bonus else "")
