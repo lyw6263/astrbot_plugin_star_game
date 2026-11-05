@@ -20,7 +20,7 @@ help: >-
   发「属性 文字」才看文字版。
 version: v3.3.0
 author: dsh
-repo: https://github.com/USERNAME/astrbot_plugin_star_game
+repo: https://github.com/lyw6263/astrbot_plugin_star_game
 support_platforms:
   - aiocqhttp
 astrbot_version: ">=4.17.0"
